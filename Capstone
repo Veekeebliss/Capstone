@@ -1,0 +1,92 @@
+
+#!/bin/bash
+# --- Configuration Variables 
+RESOURCE_GROUP="Capstone_Project"
+LOCATION="eastus"
+VNET_NAME="Capstone_VNet"
+WEB_SUBNET_NAME="WebSubnet"
+DB_SUBNET_NAME="DbSubnet"
+VNET_ADDRESS_PREFIX="10.0.0.0/16"
+WEB_SUBNET_PREFIX="10.0.1.0/24"
+DB_SUBNET_PREFIX="10.0.2.0/24"
+
+WEB_ADMINS_GROUP="WebAdmins"
+DB_ADMINS_GROUP="DBAdmins"
+
+# For Testers
+TEST_USER_1_UPN="testuser1_Capstone_project@<vickeeregmail>.onmicrosoft.com"
+TEST_USER_2_UPN="testuser2_Capstone_project@<vickeeregmail>.onmicrosoft.com"
+TEST_USER_PASSWORD="aVeryComplexPassword!123"
+
+# --- Helper Function for Logging ---
+log_message() {
+    echo " "
+    echo "==================================================================="
+    echo " $1"
+    echo "==================================================================="
+    echo " "
+}
+
+# --- Main Script ---
+
+# 1. Create Resource Group
+log_message "Creating resource group: $RESOURCE_GROUP"
+az group create --name $RESOURCE_GROUP --location $LOCATION
+
+# 2. Create Virtual Network and Subnets
+log_message "Creating VNet '$VNET_NAME' with subnets"
+az network vnet create \
+    --resource-group $RESOURCE_GROUP \
+    --name $VNET_NAME \
+    --address-prefix $VNET_ADDRESS_PREFIX \
+    --subnet-name $WEB_SUBNET_NAME \
+    --subnet-prefix $WEB_SUBNET_PREFIX
+
+log_message "Adding DB subnet: $DB_SUBNET_NAME"
+az network vnet subnet create \
+    --resource-group $RESOURCE_GROUP \
+    --vnet-name $VNET_NAME \
+    --name $DB_SUBNET_NAME \
+    --address-prefix $DB_SUBNET_PREFIX
+
+# 3. Create Azure AD Groups
+log_message "Creating Azure AD group: $WEB_ADMINS_GROUP"
+az ad group create --display-name $WEB_ADMINS_GROUP --mail-nickname $WEB_ADMINS_GROUP
+
+log_message "Creating Azure AD group: $DB_ADMINS_GROUP"
+az ad group create --display-name $DB_ADMINS_GROUP --mail-nickname $DB_ADMINS_GROUP
+
+# 4. Assign Roles
+log_message "Assigning 'Reader' role to '$DB_ADMINS_GROUP' on DB Subnet"
+DB_SUBNET_ID=$(az network vnet subnet show --resource-group $RESOURCE_GROUP --vnet-name $VNET_NAME --name $DB_SUBNET_NAME --query id -o tsv)
+DB_ADMINS_GROUP_ID=$(az ad group show --group $DB_ADMINS_GROUP --query id -o tsv)
+
+az role assignment create \
+    --assignee $DB_ADMINS_GROUP_ID \
+    --role "Reader" \
+    --scope $DB_SUBNET_ID
+
+# 5. Add Test Users 
+log_message "Creating and adding test users to groups"
+
+WEB_ADMINS_GROUP_ID=$(az ad group show --group $WEB_ADMINS_GROUP --query id -o tsv)
+
+# Create user 1 and add to WebAdmins
+log_message "Creating user 1 and adding to $WEB_ADMINS_GROUP"
+USER_1_ID=$(az ad user create --display-name "Test User 1" --password $TEST_USER_PASSWORD --user-principal-name $TEST_USER_1_UPN --query id -o tsv)
+if [ ! -z "$USER_1_ID" ]; then
+    az ad group member add --group $WEB_ADMINS_GROUP --member-id $USER_1_ID
+fi
+
+# Create user 2 and add to DBAdmins
+log_message "Creating user 2 and adding to $DB_ADMINS_GROUP"
+USER_2_ID=$(az ad user create --display-name "Test User 2" --password $TEST_USER_PASSWORD --user-principal-name $TEST_USER_2_UPN --query id -o tsv)
+if [ ! -z "$USER_2_ID" ]; then
+    az ad group member add --group $DB_ADMINS_GROUP --member-id $USER_2_ID
+fi
+
+# 6. Validate Role Assignments
+log_message "Validating role assignment for '$DB_ADMINS_GROUP'"
+az role assignment list --assignee $DB_ADMINS_GROUP_ID --scope $DB_SUBNET_ID --all --query '[].{roleDefinitionName:roleDefinitionName, scope:scope}' -o table
+
+log_message "Deployment and configuration complete!"
